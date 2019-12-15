@@ -1,0 +1,32 @@
+.main-root {
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+}
+
+.overlay {
+    position: absolute;
+    z-index: 100;
+    margin: 20px;
+    padding: 16px;
+}
+
+.infoOverlay {
+    left: 0;
+    top: 0;
+}
+
+.debugOverlay {
+    left: 0;
+    bottom: 0;
+}
+
+.layoutOverlay {
+    right: 0;
+    top: 0;
+}
+
+.pixi-scene {
+    width: 100%;
+    height: 100%;
+}
