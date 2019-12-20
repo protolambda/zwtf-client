@@ -2,6 +2,7 @@ import React, {Component} from 'react';
 import {Paper, Typography} from "@material-ui/core";
 import ReconnectingWebSocket from "reconnecting-websocket";
 import * as PIXI from 'pixi.js';
+import {JsonDecoder, Result as JsonResult, Ok as JsonOk, Err as JsonErr} from "ts.data.json";
 import "./Main.css";
 
 PIXI.settings.RESOLUTION = window.devicePixelRatio;
@@ -17,11 +18,27 @@ type DepositIndex = number;
 type CommitteeIndex = number;
 type Root = string;
 
+const decBlockPtr = JsonDecoder.number;
+const decAttestationPtr = JsonDecoder.number;
+const decLatestVotesPtr = JsonDecoder.number;
+const decGwei = JsonDecoder.number;
+const decSlot = JsonDecoder.number;
+const decValidatorIndex = JsonDecoder.number;
+const decDepositIndex = JsonDecoder.number;
+const decCommitteeIndex = JsonDecoder.number;
+const decRoot = JsonDecoder.string;
+
 type FFG = {
     source: Gwei;
     target: Gwei;
     head: Gwei;
 }
+
+const decFFG = JsonDecoder.object<FFG>({
+    source: decGwei,
+    target: decGwei,
+    head: decGwei,
+}, 'ffg');
 
 type ValidatorCounts = {
     total: number;
@@ -33,11 +50,27 @@ type ValidatorCounts = {
     withdrawable: number;
 }
 
+const decValidatorCounts = JsonDecoder.object<ValidatorCounts>({
+    total: JsonDecoder.number,
+    active: JsonDecoder.number,
+    slashed: JsonDecoder.number,
+    eligible: JsonDecoder.number,
+    nonEligible: JsonDecoder.number,
+    exiting: JsonDecoder.number,
+    withdrawable: JsonDecoder.number,
+}, 'validator_counts');
+
 type Eth1Data = {
     depositRoot: Root;
     depositCount: DepositIndex;
     blockHash: Root;
 }
+
+const decEth1Data = JsonDecoder.object<Eth1Data>({
+    depositRoot: decRoot,
+    depositCount: decDepositIndex,
+    blockHash: decRoot,
+}, 'eth1_data');
 
 type HeadSummary = {
     headBlock: BlockPtr;
@@ -52,12 +85,32 @@ type HeadSummary = {
     currentFFG: FFG;
 }
 
+const decHeadSummary = JsonDecoder.object<HeadSummary>({
+    headBlock: decBlockPtr,
+    slot: decSlot,
+    proposerIndex: decValidatorIndex,
+    validatorCounts: decValidatorCounts,
+    totalStaked: decGwei,
+    avgBalance: decGwei,
+    depositIndex: decDepositIndex,
+    eth1Data: decEth1Data,
+    previousFFG: decFFG,
+    currentFFG: decFFG,
+}, 'head_summary');
+
 type BlockSummary = {
     selfPtr: BlockPtr;
-    hTR: Root;
+    htr: Root;
     slot: Slot;
     parent: BlockPtr;
 }
+
+const decBlockSummary = JsonDecoder.object<BlockSummary>({
+    selfPtr: decBlockPtr,
+    htr: decRoot,
+    slot: decSlot,
+    parent: decBlockPtr,
+}, 'block_summary');
 
 type AttestationSummary = {
     selfPtr: AttestationPtr;
@@ -68,10 +121,24 @@ type AttestationSummary = {
     source: BlockPtr;
 }
 
+const decAttestationSummary = JsonDecoder.object<AttestationSummary>({
+    selfPtr: decAttestationPtr,
+    slot: decSlot,
+    commIndex: decCommitteeIndex,
+    head: decBlockPtr,
+    target: decBlockPtr,
+    source: decBlockPtr,
+}, 'attestation_summary');
+
 type VoteSummary = {
     validatorIndex: ValidatorIndex;
     attestationPtr: AttestationPtr;
 }
+
+const decVoteSummary = JsonDecoder.object<VoteSummary>({
+    validatorIndex: decValidatorIndex,
+    attestationPtr: decAttestationPtr,
+}, 'vote_summary');
 
 type MemoryState = {
     // ptrs rotate around buffer
@@ -82,14 +149,13 @@ type MemoryState = {
     latestVotes: LatestVotesPtr; // index modulo LatestVotesMemory
 }
 
-type Memory = {
-    nextDiffIndex: number;
-    offsetState: MemoryState;
-    headBuffer: Array<HeadSummary>;
-    finalizedBuffer: Array<BlockPtr>;
-    votesBuffer: Array<VoteSummary>;
-    // other buffer data is put into Pixi objects
-}
+const decMemoryState = JsonDecoder.object<MemoryState>({
+    head: decBlockPtr,
+    finalized: decBlockPtr,
+    blocks: decBlockPtr,
+    attestations: decAttestationPtr,
+    latestVotes: decLatestVotesPtr,
+}, 'memory_state');
 
 type MemoryDiff = {
     diffIndex: number;
@@ -100,6 +166,16 @@ type MemoryDiff = {
     attestations: Array<AttestationSummary>;
     latestVotes: Array<VoteSummary>;
 }
+
+const decMemoryDiff = JsonDecoder.object<MemoryDiff>({
+    diffIndex: JsonDecoder.number,
+    previous: decMemoryState,
+    head: JsonDecoder.array<HeadSummary>(decHeadSummary, 'head'),
+    finalized:  JsonDecoder.array<BlockPtr>(decBlockPtr, 'finalized'),
+    blocks:  JsonDecoder.array<BlockSummary>(decBlockSummary, 'blocks'),
+    attestations:  JsonDecoder.array<AttestationSummary>(decAttestationSummary, 'attestations'),
+    latestVotes: JsonDecoder.array<VoteSummary>(decVoteSummary, 'latest_votes'),
+}, 'memory_diff');
 
 class PixiValidator extends PIXI.Container {
     index: number;
@@ -247,13 +323,15 @@ class World {
     attestations: PIXI.Container;
     validators: PIXI.Container;
 
+    head: Array<HeadSummary> = [];
+    finalized: Array<BlockPtr> = [];
+
     relationLines: PIXI.Graphics;
 
-    memory: Memory;
+    nextDiffIndex: number | null = null;
 
-    constructor(app: PIXI.Application, memory: Memory) {
+    constructor(app: PIXI.Application) {
         this.app = app;
-        this.memory = memory;
 
         app.stage.interactive = true;
         app.stage.buttonMode = true;
@@ -287,12 +365,12 @@ class World {
 
         this.relationLines = new PIXI.Graphics();
 
-        const lastHead = this.memory.headBuffer.length > 0 ? this.memory.headBuffer[this.memory.headBuffer.length - 1] : null;
-        this.valCount = lastHead?.validatorCounts?.total || 0;
-
         // put initial validators into view
         this.updateValSet(this.valCount)
     }
+
+    // TODO: add pruning function
+
 
     updateValSet(newValCount: number) {
         // add new validators
@@ -332,14 +410,16 @@ class World {
 
     // update the world contents, return too_old|ok|too_new based on diff aligning to current state.
     updateWorld(diff: MemoryDiff): 'too_old' | 'ok' | 'too_new' {
-        if (this.memory.nextDiffIndex < diff.diffIndex) {
-            return 'too_new';
-        }
-        if (this.memory.nextDiffIndex > diff.diffIndex) {
-            return 'too_old';
+        if (this.nextDiffIndex != null) {
+            if (this.nextDiffIndex < diff.diffIndex) {
+                return 'too_new';
+            }
+            if (this.nextDiffIndex > diff.diffIndex) {
+                return 'too_old';
+            }
         }
 
-        this.memory.headBuffer.push(...diff.head);
+        this.head.push(...diff.head);
 
         let maxValCount = this.valCount;
         for (let head of diff.head) {
@@ -350,7 +430,7 @@ class World {
             this.updateValSet(maxValCount);
         }
 
-        this.memory.finalizedBuffer.push(...diff.finalized);
+        this.finalized.push(...diff.finalized);
 
         // add new blocks
         for (let b of diff.blocks) {
@@ -374,7 +454,7 @@ class World {
             val.addVote(att);
         }
 
-        this.memory.nextDiffIndex += 1;
+        this.nextDiffIndex = diff.diffIndex + 1;
         return 'ok';
     }
 
@@ -470,10 +550,18 @@ export class Main extends Component<MainProps, MainState> {
 
     onMessageEvent = (ev: MessageEvent) => {
         const msg: string = ev.data;
-        let obj = JSON.parse(msg);
-        console.log(obj);
-        // TODO: parse into memory diff object
-        // TODO: update world with memory diff
+        const diffRes: JsonResult<MemoryDiff> = decMemoryDiff.decode(msg);
+        if (diffRes instanceof JsonOk) {
+            const diff = (diffRes as JsonOk<MemoryDiff>).value;
+            if (this.world) {
+                this.world.updateWorld(diff);
+            } else {
+                console.log("cannot process diff; uninitialized world");
+            }
+        } else {
+            const err = (diffRes as JsonErr<MemoryDiff>).error;
+            console.log('could not decode memory diff to update world', err);
+        }
     };
 
     componentDidMount() {
@@ -490,9 +578,7 @@ export class Main extends Component<MainProps, MainState> {
         });
         // TODO scale stage to fix resolution problems
 
-        // TODO load from JSON http request
-        const memory: Memory = {};
-        this.world = new World(app, memory);
+        this.world = new World(app);
 
         this._pixiContainer.appendChild(app.view);
 
