@@ -176,6 +176,8 @@ const decMemoryDiff = JsonDecoder.object<MemoryDiff>({
     latestVotes: JsonDecoder.array<VoteSummary>(decVoteSummary, 'latest_votes'),
 }, 'memory_diff');
 
+const ZERO_POS = new PIXI.Point(0, 0);
+
 class PixiValidator extends PIXI.Container {
     index: number;
     lastVotes: Array<PixiAttestation>;
@@ -212,13 +214,15 @@ class PixiValidator extends PIXI.Container {
             // or maybe draw an idle icon?
             return;
         }
-        const thisPos = this.toGlobal(this.position);
+        const thisPos = this.toGlobal(ZERO_POS);
         let fade = 1.0;
         for (let vote of this.lastVotes) {
             g.moveTo(thisPos.x, thisPos.y);
             g.lineStyle(1, 0xaaaa00, fade);
             fade *= 0.7;
-            const votePos = vote.toGlobal(vote.position);
+            const votePos = vote.toGlobal(ZERO_POS);
+            // TODO: line not visible
+            // console.log("vote relation: ", thisPos.x, thisPos.y, votePos.x, votePos.y);
             g.lineTo(votePos.x, votePos.y);
         }
     }
@@ -241,12 +245,15 @@ class PixiBlock extends PIXI.Container {
     drawParentRelation(g: PIXI.Graphics, getParent: (parentPtr: BlockPtr) => PixiBlock | null) {
         const parent = getParent(this.block.parent);
         if (parent === null) {
+            console.log("null parent");
             // TODO: maybe draw something to indicate the parent was pruned?
             return
         }
-        g.moveTo(this.x, this.y);
-        g.lineStyle(1, 0xffffff, 1);
-        g.lineTo(parent.x, parent.y);
+        const thisPos = this.toGlobal(ZERO_POS);
+        g.moveTo(thisPos.x, thisPos.y);
+        g.lineStyle(1, 0xffffff, 1.0);
+        const parentPos = parent.toGlobal(ZERO_POS);
+        g.lineTo(parentPos.x, parentPos.y);
     }
 }
 
@@ -266,38 +273,43 @@ class PixiAttestation extends PIXI.Container {
 
         const blockImg = new PIXI.Sprite(PIXI.Texture.from("attestation"));
         this.addChild(blockImg);
-
-        this.width = 10;
-        this.height = 10;
+        this.width = 7;
+        this.height = 7;
     }
 
     // draw a line between attestation and block
     drawBlockRelation(g: PIXI.Graphics) {
-        const attPos = this.toGlobal(this.position);
+        const attPos = this.toGlobal(ZERO_POS);
 
         // Source
         if (this.source) {
-            const sourcePos = this.source.toGlobal(this.source.position);
+            const sourcePos = this.source.toGlobal(ZERO_POS);
             g.moveTo(attPos.x, attPos.y);
-            g.lineStyle(1, 0xff0000, 1);
+            g.lineStyle(1, 0xff0000, 1.0);
             g.lineTo(sourcePos.x, sourcePos.y);
         }
 
         // Target
         if (this.target) {
-            const targetPos = this.target.toGlobal(this.target.position);
+            const targetPos = this.target.toGlobal(ZERO_POS);
             g.moveTo(attPos.x, attPos.y);
-            g.lineStyle(1, 0x00ff00, 1);
+            g.lineStyle(1, 0x00ff00, 1.0);
             g.lineTo(targetPos.x, targetPos.y);
         }
         // Head
         if (this.head) {
-            const headPos = this.head.toGlobal(this.head.position);
+            const headPos = this.head.toGlobal(ZERO_POS);
             g.moveTo(attPos.x, attPos.y);
-            g.lineStyle(1, 0x0000ff, 1);
+            g.lineStyle(1, 0x0000ff, 1.0);
             g.lineTo(headPos.x, headPos.y);
         }
     }
+}
+
+type TreeEntry = {
+    parent: BlockPtr;
+    slot: Slot;
+    children: Array<BlockPtr>;
 }
 
 class World {
@@ -315,6 +327,8 @@ class World {
     finalized: Array<BlockPtr> = [];
 
     relationLines: PIXI.Graphics;
+
+    tree: Record<BlockPtr, TreeEntry> = {};
 
     nextDiffIndex: number | null = null;
 
@@ -352,6 +366,10 @@ class World {
         });
 
         this.relationLines = new PIXI.Graphics();
+        this.relationLines.width = app.view.width;
+        this.relationLines.height = app.view.height;
+        // this.relationLines.position.set(app.view.width * 0.5, app.view.height * 0.5);
+        this.app.stage.addChild(this.relationLines);
 
         // put initial validators into view
         this.updateValSet(this.valCount)
@@ -424,6 +442,30 @@ class World {
         // add new blocks
         for (let b of diff.blocks) {
             this.blocks.addChild(new PixiBlock(b));
+
+            const prevSelf = this.tree[b.selfPtr];
+            if(prevSelf) {
+                prevSelf.parent = b.parent;
+                prevSelf.slot = b.slot;
+            } else {
+                this.tree[b.selfPtr] = {
+                    parent: b.parent,
+                    slot: b.slot,
+                    children: [b.selfPtr]
+                }
+            }
+            const prevParent = this.tree[b.parent];
+            if (prevParent) {
+                if (!prevSelf || prevSelf.parent == 0) { // don't add twice, only when new or previously unset
+                    prevParent.children.push(b.selfPtr)
+                }
+            } else {
+                this.tree[b.parent] = {
+                    parent: 0,
+                    slot: 0,
+                    children: [b.selfPtr]
+                }
+            }
         }
         // add new attestations
         for (let a of diff.attestations) {
@@ -443,13 +485,89 @@ class World {
             val.addVote(att);
         }
 
+        this.layoutDag();
+        this.drawRelations();
+
         this.nextDiffIndex = diff.diffIndex + 1;
         return 'ok';
     }
 
     layoutDag() {
-        // TODO move blocks to correct positions
-        // TODO move attestations around the blocks
+        // order index of each block within their slot
+        const order: Record<BlockPtr, number> = {};
+        // blocks known for each slot
+        const slotHeights: Record<Slot, number> = {};
+
+        const head = this.head[this.head.length-1];
+        if (!head) {
+            return
+        }
+        order[head.headBlock] = 0;
+
+        const process_block = (b: BlockPtr) => {
+            const treeData = this.tree[b];
+            if (!treeData) {
+                return
+            }
+            if (slotHeights.hasOwnProperty(treeData.slot)) {
+                slotHeights[treeData.slot] += 1
+            } else {
+                slotHeights[treeData.slot] = 1
+            }
+            order[b] = slotHeights[treeData.slot] - 1;
+            for (let child of treeData.children) {
+                if (!order.hasOwnProperty(child)) {
+                    process_block(child)
+                }
+            }
+        };
+        // walk from the head back up the tree, and order blocks as we go.
+        // Every time we find unseen children nodes, we order them up later in the slot column.
+        let block = head.headBlock;
+        while (true) {
+            const treeData = this.tree[block];
+            if(!treeData) {
+                break
+            }
+            process_block(block);
+            block = treeData.parent;
+            if(block == 0) {
+                break;
+            }
+        }
+        // move blocks to their position
+        const slotWidth = 30;
+        const slotHeight = 40;
+        for (let block of this.blocks.children) {
+            const blockSummary = (block as PixiBlock).block;
+            const slotOrder = order[blockSummary.selfPtr];
+            block.position.set(blockSummary.slot * slotWidth, slotOrder * slotHeight);
+            // console.log("block ", blockSummary.selfPtr, " at ", block.position.x, block.position.y);
+        }
+        const attOffsetX = 10;
+        const attOffsetY = 8;
+        const attCounts: Record<BlockPtr, number> = {};
+        for (let att of this.attestations.children) {
+            const attSummary = (att as PixiAttestation).attestation;
+            if (attCounts.hasOwnProperty(attSummary.head)) {
+                attCounts[attSummary.head] += 1
+            } else {
+                attCounts[attSummary.head] = 1
+            }
+            let slotOrder = 0;
+            if (order.hasOwnProperty(attSummary.head)) {
+                slotOrder = order[attSummary.head];
+            }
+            const attOrder = attCounts[attSummary.head] - 1;
+            // offset-y a little for each attestation that is part of the block
+            att.position.set(attSummary.slot * slotWidth + attOffsetX, slotOrder * slotHeight + (attOrder * attOffsetY));
+            // console.log("att ", attSummary.selfPtr, " at ", att.position.x, att.position.y);
+        }
+        const dagOffsetY = Math.floor(this.app.view.height * 0.8);
+        // console.log("dagOffsetY: ", dagOffsetY);
+        this.attestations.position.set(-head.slot * slotWidth + this.app.view.width * 0.5, dagOffsetY);
+        this.blocks.position.set(-head.slot * slotWidth + this.app.view.width * 0.5, dagOffsetY);
+        // console.log("blocks at ", this.blocks.position.x, this.blocks.position.y);
     }
 
     getBlock = (blockPtr: BlockPtr): PixiBlock | null => {
@@ -463,6 +581,7 @@ class World {
     };
 
     drawRelations() {
+        // this.relationLines.clear();
         for (let block of this.blocks.children) {
             (block as PixiBlock).drawParentRelation(this.relationLines, this.getBlock);
         }
