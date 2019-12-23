@@ -6,7 +6,6 @@ import {JsonDecoder, Result as JsonResult, Ok as JsonOk, Err as JsonErr} from "t
 import "./Main.css";
 
 PIXI.settings.RESOLUTION = window.devicePixelRatio;
-PIXI.settings.SCALE_MODE = PIXI.SCALE_MODES.NEAREST;
 
 type BlockPtr = number;
 type AttestationPtr = number;
@@ -192,12 +191,8 @@ class PixiValidator extends PIXI.Container {
         // size for balance?
         // fade for inactive validators?
 
-        const rectangle = new PIXI.Graphics();
-        rectangle.lineStyle(1, 0x3300FF, 1);
-        rectangle.beginFill(0xCCFF66);
-        rectangle.drawRect(0, 0, 10.0, 10.0);
-        rectangle.endFill();
-        this.addChild(rectangle);
+        const img = new PIXI.Sprite(PIXI.Texture.from("validator"));
+        this.addChild(img);
         this.width = 10;
         this.height = 10;
     }
@@ -237,13 +232,8 @@ class PixiBlock extends PIXI.Container {
         this.block = block;
         this.name = "block_" + block.selfPtr;
 
-        // TODO block sprite
-        const rectangle = new PIXI.Graphics();
-        rectangle.lineStyle(1, 0xFF3300, 1);
-        rectangle.beginFill(0x66CCFF);
-        rectangle.drawRect(0, 0, 10.0, 10.0);
-        rectangle.endFill();
-        this.addChild(rectangle);
+        const blockImg = new PIXI.Sprite(PIXI.Texture.from("block"));
+        this.addChild(blockImg);
         this.width = 10;
         this.height = 10;
     }
@@ -274,13 +264,11 @@ class PixiAttestation extends PIXI.Container {
         this.head = head;
         this.name = "att_" + attestation.selfPtr;
 
-        // TODO attestation sprite
-        const rectangle = new PIXI.Graphics();
-        rectangle.lineStyle(1, 0x33FF00, 1);
-        rectangle.beginFill(0xFFCC66);
-        rectangle.drawRect(0, 0, 5.0, 5.0);
-        rectangle.endFill();
-        this.addChild(rectangle);
+        const blockImg = new PIXI.Sprite(PIXI.Texture.from("attestation"));
+        this.addChild(blockImg);
+
+        this.width = 10;
+        this.height = 10;
     }
 
     // draw a line between attestation and block
@@ -384,13 +372,13 @@ class World {
     }
 
     updateValGridSize(valCount: number) {
-        const margin = 40;
-        const minGridWidth = 100;
+        const margin = 20;
         // sqrt * 1.5: spread over rectangular area, but not completely square preferably.
-        const desiredWidth = Math.min(Math.floor(Math.sqrt(valCount) * 1.5), minGridWidth);
+        const desiredWidth = Math.floor(Math.sqrt(valCount) * 1.5);
+        const minWidth = Math.floor(Math.sqrt(valCount) * 0.5);
         const effectiveAppWidth = (this.app.view.width - (margin * 2));
-        const valBoxSize = Math.min(Math.floor(effectiveAppWidth / desiredWidth), 1);
-        const width = Math.min(Math.floor(effectiveAppWidth / valBoxSize), minGridWidth);
+        const valBoxSize = Math.max(Math.floor(effectiveAppWidth / desiredWidth), 6);
+        const width = Math.max(Math.floor(effectiveAppWidth / valBoxSize), minWidth);
         const height = Math.ceil(valCount / width);
         let fromValIndex = 0;
         // check if grid dimensions have changed
@@ -398,6 +386,7 @@ class World {
             // only update positions of new validators if the grid dimensions have not changed.
             fromValIndex = this.valCount;
         }
+        this.validators.position.set(margin, margin);
         for (let i = fromValIndex; i < valCount; i++) {
             const val = this.validators.getChildByName("val_" + i);
             const x = i % width;
@@ -550,7 +539,9 @@ export class Main extends Component<MainProps, MainState> {
 
     onMessageEvent = (ev: MessageEvent) => {
         const msg: string = ev.data;
-        const diffRes: JsonResult<MemoryDiff> = decMemoryDiff.decode(msg);
+        console.log("received msg: ", msg);
+        const msgData: any = JSON.parse(msg);
+        const diffRes: JsonResult<MemoryDiff> = decMemoryDiff.decode(msgData);
         if (diffRes instanceof JsonOk) {
             const diff = (diffRes as JsonOk<MemoryDiff>).value;
             if (this.world) {
@@ -565,10 +556,28 @@ export class Main extends Component<MainProps, MainState> {
     };
 
     componentDidMount() {
+        // TODO scale stage to fix resolution problems
+        const loader = PIXI.Loader.shared;
+        PIXI.Loader.registerPlugin(PIXI.TextureLoader);
+
+        loader
+            .add('block', "block.png")
+            .add('attestation', "attestation.png")
+            .add('validator', "validator.png")
+            .load((loader: PIXI.Loader, resources: Partial<Record<string, PIXI.LoaderResource>>) => {
+                this.setupWorld();
+            })
+            .onError.add(() => {
+                console.log("failed to load resources")
+            });
+    }
+
+    setupWorld = () => {
         if (this._pixiContainer === null) {
             console.log("Error: component mounted before pixi container ref was completed.");
             return
         }
+
         const app = new PIXI.Application({
             backgroundColor: 0xaaaaff,
             width: (this._pixiContainer.offsetWidth || 500),
@@ -576,14 +585,13 @@ export class Main extends Component<MainProps, MainState> {
             sharedLoader: true,
             sharedTicker: true
         });
-        // TODO scale stage to fix resolution problems
 
         this.world = new World(app);
 
         this._pixiContainer.appendChild(app.view);
 
         // TODO start rendering loop for pixi ("request frame" loop to play nice with the browser?)
-    }
+    };
 
     render() {
         return (
