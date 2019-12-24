@@ -217,13 +217,13 @@ class PixiValidator extends PIXI.Container {
         const thisPos = this.toGlobal(ZERO_POS);
         let fade = 1.0;
         for (let vote of this.lastVotes) {
-            g.moveTo(thisPos.x, thisPos.y);
-            g.lineStyle(1, 0xaaaa00, fade);
+            // g.moveTo(thisPos.x, thisPos.y);
+            // g.lineStyle(1, 0xaaaa00, fade);
             fade *= 0.7;
-            const votePos = vote.toGlobal(ZERO_POS);
-            // TODO: line not visible
-            // console.log("vote relation: ", thisPos.x, thisPos.y, votePos.x, votePos.y);
-            g.lineTo(votePos.x, votePos.y);
+            // const votePos = vote.toGlobal(ZERO_POS);
+            // // TODO: line not visible
+            // // console.log("vote relation: ", thisPos.x, thisPos.y, votePos.x, votePos.y);
+            // g.lineTo(votePos.x, votePos.y);
         }
     }
 }
@@ -392,10 +392,10 @@ class World {
     updateValGridSize(valCount: number) {
         const margin = 20;
         // sqrt * 1.5: spread over rectangular area, but not completely square preferably.
-        const desiredWidth = Math.floor(Math.sqrt(valCount) * 1.5);
+        const desiredWidth = Math.floor(Math.sqrt(valCount) * 1.8);
         const minWidth = Math.floor(Math.sqrt(valCount) * 0.5);
         const effectiveAppWidth = (this.app.view.width - (margin * 2));
-        const valBoxSize = Math.max(Math.floor(effectiveAppWidth / desiredWidth), 6);
+        const valBoxSize = Math.max(Math.floor(effectiveAppWidth / desiredWidth), 4);
         const width = Math.max(Math.floor(effectiveAppWidth / valBoxSize), minWidth);
         const height = Math.ceil(valCount / width);
         let fromValIndex = 0;
@@ -546,6 +546,8 @@ class World {
         }
         const attOffsetX = 10;
         const attOffsetY = 8;
+        const attMarginX = 10;
+        const attMarginY = 20;
         const attCounts: Record<BlockPtr, number> = {};
         for (let att of this.attestations.children) {
             const attSummary = (att as PixiAttestation).attestation;
@@ -560,13 +562,13 @@ class World {
             }
             const attOrder = attCounts[attSummary.head] - 1;
             // offset-y a little for each attestation that is part of the block
-            att.position.set(attSummary.slot * slotWidth + attOffsetX, slotOrder * slotHeight + (attOrder * attOffsetY));
+            att.position.set(attSummary.slot * slotWidth + attOffsetX + attMarginX, slotOrder * slotHeight + (attOrder * attOffsetY) + attMarginY);
             // console.log("att ", attSummary.selfPtr, " at ", att.position.x, att.position.y);
         }
-        const dagOffsetY = Math.floor(this.app.view.height * 0.8);
+        const dagOffsetY = Math.floor(this.app.view.height * 0.65);
         // console.log("dagOffsetY: ", dagOffsetY);
-        this.attestations.position.set(-head.slot * slotWidth + this.app.view.width * 0.5, dagOffsetY);
-        this.blocks.position.set(-head.slot * slotWidth + this.app.view.width * 0.5, dagOffsetY);
+        this.attestations.position.set(-head.slot * slotWidth + this.app.view.width * 0.9, dagOffsetY);
+        this.blocks.position.set(-head.slot * slotWidth + this.app.view.width * 0.9, dagOffsetY);
         // console.log("blocks at ", this.blocks.position.x, this.blocks.position.y);
     }
 
@@ -581,7 +583,7 @@ class World {
     };
 
     drawRelations() {
-        // this.relationLines.clear();
+        this.relationLines.clear();
         for (let block of this.blocks.children) {
             (block as PixiBlock).drawParentRelation(this.relationLines, this.getBlock);
         }
